@@ -1,4 +1,4 @@
-name: Build X Pro
+name: Build X Pro Lite
 
 on:
   push:
@@ -30,28 +30,20 @@ jobs:
         shell: bash {0}
         run: |
           {
-            echo '## Files in repo'
+            echo '## Errors'
             echo '```'
-            find . -type f -not -path './.git/*' -not -path './app/build/*' -not -path './.gradle/*' -not -path './build/*' | sort
+            grep -n -E 'error:|What went wrong|Execution failed|Could not|Unresolved|not found' build.log 2>/dev/null | head -30
             echo '```'
-            if [ -f build.log ]; then
-              echo '## Errors'
-              echo '```'
-              grep -n -E 'error:|What went wrong|Execution failed|Could not|Unresolved|not found' build.log | head -30
-              echo '```'
-              echo '## Build log (last 100 lines)'
-              echo '```'
-              tail -100 build.log
-              echo '```'
-            else
-              echo '## build.log is missing: a step BEFORE Gradle failed'
-            fi
+            echo '## Build log (last 100 lines)'
+            echo '```'
+            tail -100 build.log 2>/dev/null
+            echo '```'
           } >> "$GITHUB_STEP_SUMMARY"
 
       - name: Rename APK
-        run: cp app/build/outputs/apk/debug/app-debug.apk X-Pro.apk
+        run: cp app/build/outputs/apk/debug/app-debug.apk X-Pro-Lite.apk
 
       - uses: actions/upload-artifact@v4
         with:
-          name: X-Pro
-          path: X-Pro.apk
+          name: X-Pro-Lite
+          path: X-Pro-Lite.apk
