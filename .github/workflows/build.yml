@@ -6,7 +6,7 @@ on:
 
 jobs:
   build:
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     steps:
       - uses: actions/checkout@v4
 
@@ -14,8 +14,6 @@ jobs:
         with:
           distribution: temurin
           java-version: '17'
-
-      - uses: android-actions/setup-android@v3
 
       - uses: gradle/actions/setup-gradle@v4
         with:
@@ -36,14 +34,18 @@ jobs:
             echo '```'
             find . -type f -not -path './.git/*' -not -path './app/build/*' -not -path './.gradle/*' -not -path './build/*' | sort
             echo '```'
-            echo '## Errors'
-            echo '```'
-            grep -n -E 'error:|What went wrong|Execution failed|Could not|Unresolved' build.log 2>/dev/null | head -30
-            echo '```'
-            echo '## Build log (last 100 lines)'
-            echo '```'
-            tail -100 build.log 2>/dev/null
-            echo '```'
+            if [ -f build.log ]; then
+              echo '## Errors'
+              echo '```'
+              grep -n -E 'error:|What went wrong|Execution failed|Could not|Unresolved|not found' build.log | head -30
+              echo '```'
+              echo '## Build log (last 100 lines)'
+              echo '```'
+              tail -100 build.log
+              echo '```'
+            else
+              echo '## build.log is missing: a step BEFORE Gradle failed'
+            fi
           } >> "$GITHUB_STEP_SUMMARY"
 
       - name: Rename APK
