@@ -1,24 +1,26 @@
 /**
- * X Pro: injected.js
+ * X Pro Lite: injected.js
  *
  * A. inject injected.css
- * B. capture video URLs from X's own API responses (fetch/XHR hooks)
- * C. add a download button on every <video> (re-scanned every 2 s)
+ * B. capture mp4 variants (lowest AND highest bitrate) from X's API responses
+ * C. cover every video player with a thumbnail + "Play Low Data Video" button
+ *    and stop X's own player from loading or autoplaying video
  * D. hide "Open in app" banners and promoted tweets
  *
  * Talks to Android through window.Android (see MainActivity.Bridge).
  */
 (function () {
   'use strict';
-  if (window.__xproInstalled) return;          // idempotent: safe to inject twice
+  if (window.__xproInstalled) return;
   window.__xproInstalled = true;
 
-  var BTN_CLASS = 'xpro-dl';
   var HIDDEN_CLASS = 'xpro-hidden';
+  var OV_CLASS = 'xpro-ov';
   var API_RE = /\/i\/api\/|\/\/api\.(x|twitter)\.com\//;
+  var GIF_RE = /\/tweet_video\//;
 
-  var byMedia = {};   // mediaId -> best mp4 URL
-  var byTweet = {};   // tweetId -> best mp4 URL
+  var byMedia = {};   // mediaId -> {low, high, lowBytes, highBytes}
+  var byTweet = {};   // tweetId -> same
 
   function toast(msg) { try { window.Android.toast(msg); } catch (e) { /* not in app */ } }
 
@@ -27,7 +29,7 @@
   function ensureStyle() {
     if (document.getElementById('xpro-style')) return;
     var parent = document.head || document.documentElement;
-    if (!parent) return;                        // too early; the next tick retries
+    if (!parent) return;
     var s = document.createElement('style');
     s.id = 'xpro-style';
     s.textContent = window.__XPRO_CSS || '';
@@ -35,17 +37,26 @@
   }
   ensureStyle();
 
-  /* ------------------------------------------- B. Capture mp4 URLs from API JSON */
+  /* ---------------------------------------------- B. Capture variants from API JSON */
 
-  function bestMp4(variants) {
-    var best = null;
+  /** mp4 variants sorted by bitrate ASCENDING: [0] = lowest (saves data), last = HD. */
+  function pickVariants(variants, durMs) {
+    var mp4 = [];
     for (var i = 0; i < variants.length; i++) {
       var v = variants[i];
-      if (v && v.content_type === 'video/mp4' && v.url) {
-        if (!best || (v.bitrate || 0) > (best.bitrate || 0)) best = v;
-      }
+      if (v && v.content_type === 'video/mp4' && v.url) mp4.push(v);
     }
-    return best ? best.url : null;
+    if (!mp4.length) return null;
+    mp4.sort(function (a, b) { return (a.bitrate || 0) - (b.bitrate || 0); });
+    var low = mp4[0];
+    var high = mp4[mp4.length - 1];
+    var secs = (durMs || 0) / 1000;
+    return {
+      low: low.url,
+      high: high.url,
+      lowBytes: Math.round((low.bitrate || 0) / 8 * secs),
+      highBytes: Math.round((high.bitrate || 0) / 8 * secs)
+    };
   }
 
   function mediaIdFrom(s) {
@@ -57,12 +68,12 @@
     if (!o || typeof o !== 'object' || depth > 40 || seen.has(o)) return;
     seen.add(o);
     if (o.video_info && o.video_info.variants) {
-      var url = bestMp4(o.video_info.variants);
-      if (url) {
-        var mid = mediaIdFrom(o.media_url_https) || mediaIdFrom(url);
-        if (mid) byMedia[mid] = url;
+      var info = pickVariants(o.video_info.variants, o.video_info.duration_millis);
+      if (info) {
+        var mid = mediaIdFrom(o.media_url_https) || mediaIdFrom(info.low);
+        if (mid) byMedia[mid] = info;
         var t = /status\/(\d+)/.exec(o.expanded_url || '');
-        if (t && !byTweet[t[1]]) byTweet[t[1]] = url;
+        if (t && !byTweet[t[1]]) byTweet[t[1]] = info;
       }
     }
     for (var k in o) {
@@ -98,15 +109,45 @@
     return origOpen.apply(this, arguments);
   };
 
-  /* ---------------------------------------------- C. Download buttons on videos */
+  /* ------------------------------ C. Replace X's player with a low-data overlay */
 
-  function nearbyTweetIds(video) {
+  // X's own player must never autoplay (GIFs are tiny and keep playing).
+  var origPlay = HTMLMediaElement.prototype.play;
+  HTMLMediaElement.prototype.play = function () {
+    if (this.tagName === 'VIDEO' && !GIF_RE.test(this.currentSrc || this.src || '')) {
+      try { this.pause(); } catch (e) { /* ignore */ }
+      return Promise.resolve();
+    }
+    return origPlay.apply(this, arguments);
+  };
+
+  function quietVideos() {
+    document.querySelectorAll('video').forEach(function (v) {
+      if (GIF_RE.test(v.currentSrc || v.src || '')) return;
+      v.preload = 'none';
+      v.autoplay = false;
+      if (!v.paused) { try { v.pause(); } catch (e) { /* ignore */ } }
+    });
+  }
+
+  function isGif(host) {
+    var v = host.querySelector('video');
+    return !!v && GIF_RE.test(v.currentSrc || v.src || '');
+  }
+
+  function posterOf(host) {
+    var v = host.querySelector('video');
+    if (v && v.poster) return v.poster;
+    var img = host.querySelector('img');
+    return img ? img.src : '';
+  }
+
+  function nearbyTweetIds(el) {
     var ids = [];
     function add(href) {
       var m = /\/status\/(\d+)/.exec(href || '');
       if (m && ids.indexOf(m[1]) === -1) ids.push(m[1]);
     }
-    var el = video;
     while (el && el !== document.body) {
       var links = el.querySelectorAll ? el.querySelectorAll('a[href*="/status/"]') : [];
       for (var i = 0; i < links.length; i++) add(links[i].getAttribute('href'));
@@ -117,10 +158,8 @@
     return ids;
   }
 
-  function resolveFromCache(video, ids) {
-    var src = video.currentSrc || video.src || '';
-    if (/^https:/.test(src) && /\.mp4(\?|$)/.test(src)) return src;
-    var mid = mediaIdFrom(video.poster || '');
+  function lookup(host, ids) {
+    var mid = mediaIdFrom(posterOf(host));
     if (mid && byMedia[mid]) return byMedia[mid];
     for (var i = 0; i < ids.length; i++) if (byTweet[ids[i]]) return byTweet[ids[i]];
     return null;
@@ -136,59 +175,112 @@
       var media = (j && j.mediaDetails) || [];
       for (var i = 0; i < media.length; i++) {
         if (media[i].video_info && media[i].video_info.variants) {
-          var u = bestMp4(media[i].video_info.variants);
-          if (u) return u;
+          var info = pickVariants(media[i].video_info.variants, media[i].video_info.duration_millis);
+          if (info) return info;
         }
       }
     } catch (e) { /* fall through */ }
     return null;
   }
 
-  async function downloadFor(video) {
-    var ids = nearbyTweetIds(video);
-    var url = resolveFromCache(video, ids);
-
-    if (!url && window.__INITIAL_STATE__) {
-      scanRoot(window.__INITIAL_STATE__);
-      url = resolveFromCache(video, ids);
-    }
-    for (var i = 0; !url && i < ids.length; i++) url = await fetchSyndication(ids[i]);
-
-    if (!url) { toast('Video link not found. Reload the page and try again.'); return; }
-    var name = ids[0] || mediaIdFrom(url) || String(Date.now());
-    window.Android.downloadVideo(url, name);
+  function sizeLabel(info) {
+    if (!info || !info.lowBytes) return '';
+    return ' - ' + (info.lowBytes / 1e6).toFixed(1) + 'MB';
   }
 
-  function onDownloadClick(video, btn) {
+  async function openNativePlayer(host, btn) {
     if (btn.__busy) return;
     btn.__busy = true;
     var label = btn.textContent;
-    btn.textContent = '\u2026';
-    downloadFor(video)
-      .catch(function () { toast('Download failed'); })
-      .then(function () { btn.textContent = label; btn.__busy = false; });
+    btn.textContent = 'Loading...';
+    try {
+      var ids = nearbyTweetIds(host);
+      var info = lookup(host, ids);
+      if (!info && window.__INITIAL_STATE__) {
+        scanRoot(window.__INITIAL_STATE__);
+        info = lookup(host, ids);
+      }
+      for (var i = 0; !info && i < ids.length; i++) info = await fetchSyndication(ids[i]);
+
+      if (!info) {
+        toast('Video link not found. Reload the page and try again.');
+      } else {
+        var id = ids[0] || mediaIdFrom(info.low) || String(Date.now());
+        window.Android.playLowDataVideo(info.low, info.high, id, info.lowBytes, info.highBytes);
+      }
+    } catch (e) {
+      toast('Could not open the video');
+    }
+    btn.textContent = label;
+    btn.__busy = false;
   }
 
-  function attachButtons() {
-    document.querySelectorAll('video').forEach(function (video) {
-      var host = video.closest('[data-testid="videoPlayer"]') || video.parentElement;
-      if (!host || host.querySelector('.' + BTN_CLASS)) return;
-      if (getComputedStyle(host).position === 'static') host.style.position = 'relative';
+  function findHosts() {
+    var hosts = [];
+    function add(h) {
+      if (!h || hosts.indexOf(h) !== -1) return;
+      if (h.parentElement && h.parentElement.closest('[data-xpro-host]')) return;
+      hosts.push(h);
+    }
+    document.querySelectorAll('[data-testid="videoPlayer"]').forEach(add);
+    document.querySelectorAll('video').forEach(function (v) {
+      add(v.closest('[data-testid="videoPlayer"]') || v.parentElement);
+    });
+    return hosts;
+  }
 
-      var btn = document.createElement('button');
-      btn.type = 'button';
-      btn.className = BTN_CLASS;
-      btn.textContent = '\u2B07\uFE0E';
+  function refreshOverlay(host, ov, btn) {
+    if (btn.__busy) return;
+    btn.textContent = '\u25B6 Play Low Data Video' + sizeLabel(lookup(host, nearbyTweetIds(host)));
+    if (!ov.__bg) {
+      var p = posterOf(host);
+      if (/^https:\/\/pbs\.twimg\.com\//.test(p)) {
+        ov.style.backgroundImage = 'url("' + p + '")';
+        ov.__bg = true;
+      }
+    }
+  }
 
-      ['pointerdown', 'pointerup', 'mousedown', 'touchstart'].forEach(function (ev) {
-        btn.addEventListener(ev, function (e) { e.stopPropagation(); });
-      });
-      btn.addEventListener('click', function (e) {
-        e.preventDefault();
-        e.stopPropagation();
-        onDownloadClick(video, btn);
-      });
-      host.appendChild(btn);
+  function attachOverlays() {
+    findHosts().forEach(function (host) {
+      if (isGif(host)) return;
+      var ov = null;
+      for (var i = 0; i < host.children.length; i++) {
+        if (host.children[i].classList.contains(OV_CLASS)) { ov = host.children[i]; break; }
+      }
+      var btn;
+      if (!ov) {
+        if (getComputedStyle(host).position === 'static') host.style.position = 'relative';
+        host.setAttribute('data-xpro-host', '1');
+
+        ov = document.createElement('div');
+        ov.className = OV_CLASS;
+        ov.style.cssText =
+          'position:absolute;left:0;top:0;right:0;bottom:0;z-index:2147483646;' +
+          'background:#000 center/cover no-repeat;display:flex;align-items:center;' +
+          'justify-content:center;cursor:pointer;';
+
+        btn = document.createElement('button');
+        btn.type = 'button';
+        btn.style.cssText =
+          'padding:10px 16px;border:2px solid #fff;border-radius:22px;' +
+          'background:rgba(0,0,0,.75);color:#fff;font:700 14px sans-serif;';
+        ov.appendChild(btn);
+
+        ['pointerdown', 'pointerup', 'mousedown', 'mouseup', 'touchstart', 'touchend'].forEach(function (ev) {
+          ov.addEventListener(ev, function (e) { e.stopPropagation(); });
+        });
+        var target = btn;
+        ov.addEventListener('click', function (e) {
+          e.preventDefault();
+          e.stopPropagation();
+          openNativePlayer(host, target);
+        });
+        host.appendChild(ov);
+      } else {
+        btn = ov.firstChild;
+      }
+      refreshOverlay(host, ov, btn);
     });
   }
 
@@ -229,7 +321,8 @@
 
   function tick() {
     ensureStyle();
-    attachButtons();
+    quietVideos();
+    attachOverlays();
     hidePromoBanners();
     hideAds();
   }
@@ -241,6 +334,7 @@
     pending = setTimeout(function () {
       pending = null;
       ensureStyle();
+      attachOverlays();
       hideAds();
     }, 250);
   }).observe(document, { childList: true, subtree: true });
