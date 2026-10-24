@@ -3,11 +3,11 @@ plugins {
 }
 
 android {
-    namespace 'com.xpro.app'
+    namespace 'com.xpro.lite'
     compileSdk 34
 
     defaultConfig {
-        applicationId "com.xpro.app"
+        applicationId "com.xpro.lite"
         minSdk 24
         targetSdk 34
         versionCode 1
@@ -24,4 +24,6 @@ dependencies {
     implementation 'androidx.core:core:1.13.1'
     implementation 'androidx.webkit:webkit:1.11.0'
     implementation 'androidx.swiperefreshlayout:swiperefreshlayout:1.1.0'
+    implementation 'com.google.android.exoplayer:exoplayer-core:2.19.1'
+    implementation 'com.google.android.exoplayer:exoplayer-ui:2.19.1'
 }
