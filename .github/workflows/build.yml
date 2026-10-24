@@ -1,0 +1,55 @@
+name: Build X Pro
+
+on:
+  push:
+  workflow_dispatch:
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '17'
+
+      - uses: android-actions/setup-android@v3
+
+      - uses: gradle/actions/setup-gradle@v4
+        with:
+          gradle-version: '8.7'
+
+      - name: Build debug APK
+        shell: bash
+        run: |
+          set -o pipefail
+          gradle assembleDebug --no-daemon 2>&1 | tee build.log
+
+      - name: Report
+        if: always()
+        shell: bash {0}
+        run: |
+          {
+            echo '## Files in repo'
+            echo '```'
+            find . -type f -not -path './.git/*' -not -path './app/build/*' -not -path './.gradle/*' -not -path './build/*' | sort
+            echo '```'
+            echo '## Errors'
+            echo '```'
+            grep -n -E 'error:|What went wrong|Execution failed|Could not|Unresolved' build.log 2>/dev/null | head -30
+            echo '```'
+            echo '## Build log (last 100 lines)'
+            echo '```'
+            tail -100 build.log 2>/dev/null
+            echo '```'
+          } >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Rename APK
+        run: cp app/build/outputs/apk/debug/app-debug.apk X-Pro.apk
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: X-Pro
+          path: X-Pro.apk
