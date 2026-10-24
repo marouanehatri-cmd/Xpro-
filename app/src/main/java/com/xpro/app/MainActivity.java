@@ -57,13 +57,7 @@ import java.util.concurrent.ConcurrentHashMap;
 
 /**
  * X Pro: a single-activity wrapper around x.com that hides every "browser" cue.
- *
- *  - Immersive full-screen WebView + pull-to-refresh
- *  - Native bottom navigation bar (replaces X's own web navigation)
- *  - Domain lock (x.com, twitter.com, t.co, twimg.com)
- *  - injected.css / injected.js: UI cleanup, ad hiding, one-click video download
- *  - Long-press image menu (HD download, copy link, copy bio)
- *  - DownloadManager downloads into Download/XPro/
+ * Native bottom navigation, domain lock, injected CSS/JS, video and image downloads.
  */
 public class MainActivity extends Activity {
 
@@ -313,8 +307,7 @@ public class MainActivity extends Activity {
         String host = u.getHost();
         return host != null && (host.equals("twimg.com") || host.endsWith(".twimg.com"));
     }
-
-    private class XClient extends WebViewClient {
+        private class XClient extends WebViewClient {
         @Override
         public boolean shouldOverrideUrlLoading(WebView view, WebResourceRequest request) {
             Uri u = request.getUrl();
@@ -530,4 +523,64 @@ public class MainActivity extends Activity {
         final String hd = toHdUrl(url);
 
         List<String> items = new ArrayList<>();
-        items.add(profile ? "Download pro
+        items.add(profile ? "Download profile picture (HD)" : "Download HD Image");
+        items.add("Copy image link");
+        if (profile) items.add("Copy bio");
+
+        new AlertDialog.Builder(this, AlertDialog.THEME_DEVICE_DEFAULT_DARK)
+                .setTitle(profile ? "Profile picture" : "Image")
+                .setItems(items.toArray(new String[0]), (d, which) -> {
+                    if (which == 0) downloadImage(hd);
+                    else if (which == 1) { copyToClipboard("Image link", hd); toast("Link copied"); }
+                    else if (which == 2) copyBio();
+                })
+                .show();
+    }
+
+    static String toHdUrl(String url) {
+        try {
+            Uri u = Uri.parse(url);
+            String path = u.getPath() == null ? "" : u.getPath();
+            if (path.contains("/profile_images/")) {
+                return url.replaceAll(
+                        "_(normal|bigger|mini|200x200|400x400|reasonably_small)(\\.[A-Za-z0-9]+)", "$2");
+            }
+            if (path.startsWith("/media/")) {
+                Uri.Builder b = u.buildUpon().clearQuery();
+                for (String k : u.getQueryParameterNames()) {
+                    if (!k.equals("name")) b.appendQueryParameter(k, u.getQueryParameter(k));
+                }
+                b.appendQueryParameter("name", "orig");
+                return b.build().toString();
+            }
+        } catch (Exception ignored) { }
+        return url;
+    }
+
+    private void copyBio() {
+        String js = "(function(){var e=document.querySelector('[data-testid=\"UserDescription\"]');"
+                + "return e?e.innerText:'';})()";
+        webView.evaluateJavascript(js, value -> {
+            String bio = "";
+            try {
+                Object o = new JSONTokener(value).nextValue();
+                if (o instanceof String) bio = (String) o;
+            } catch (Exception ignored) { }
+            if (bio.trim().isEmpty()) {
+                toast("No bio found on this page");
+            } else {
+                copyToClipboard("Bio", bio);
+                toast("Bio copied");
+            }
+        });
+    }
+
+    private void copyToClipboard(String label, String text) {
+        ClipboardManager cm = (ClipboardManager) getSystemService(CLIPBOARD_SERVICE);
+        if (cm != null) cm.setPrimaryClip(ClipData.newPlainText(label, text));
+    }
+
+    private void toast(String msg) {
+        Toast.makeText(this, msg, Toast.LENGTH_SHORT).show();
+    }
+}
