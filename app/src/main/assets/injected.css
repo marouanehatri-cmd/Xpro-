@@ -1,0 +1,46 @@
+/* X Pro: injected into every x.com page (see injected.js -> ensureStyle) */
+
+/* 1. Hide X's own navigation chrome. The native bottom bar replaces it. */
+header[role="banner"],
+nav[aria-label="Primary"],
+nav[aria-label="Footer"],
+[data-testid="sidebarColumn"],
+[data-testid="BottomBar"] {
+  display: none !important;
+}
+
+/* 2. Make the timeline use the full width */
+main[role="main"],
+[data-testid="primaryColumn"] {
+  max-width: 100% !important;
+  width: 100% !important;
+}
+[data-testid="primaryColumn"] {
+  border-left: 0 !important;
+  border-right: 0 !important;
+}
+
+/* 3. App feel: no scrollbars, no grey tap flash */
+::-webkit-scrollbar { display: none; }
+html { -webkit-tap-highlight-color: transparent; }
+
+/* 4. Elements hidden by injected.js (ads, "Open in app" banners) */
+.xpro-hidden { display: none !important; }
+
+/* 5. The download button placed on top-right of each video */
+.xpro-dl {
+  position: absolute;
+  top: 8px;
+  right: 8px;
+  z-index: 2147483647;
+  width: 34px;
+  height: 34px;
+  padding: 0;
+  border: 0;
+  border-radius: 17px;
+  background: #000;
+  color: #fff;
+  font: 700 17px/34px sans-serif;
+  text-align: center;
+  opacity: .88;
+}
